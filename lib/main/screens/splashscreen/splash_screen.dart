@@ -1,7 +1,21 @@
 import 'package:flutter/material.dart';
+import 'package:clipzy/routes.dart';
 
-class SplashScreen extends StatelessWidget {
+class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
+
+  @override
+  State<SplashScreen> createState() => _SplashScreenState();
+}
+
+class _SplashScreenState extends State<SplashScreen> {
+  @override
+  void initState() {
+    super.initState();
+    Future.delayed(const Duration(seconds: 3), () {
+      Navigator.pushReplacementNamed(context, AppRoutes.auth);
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -11,7 +25,7 @@ class SplashScreen extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.flash_on, size: 80, color: Colors.white),
+            const Icon(Icons.flash_on, size: 80, color: Colors.white),
             const SizedBox(height: 24),
             Text(
               'Clipzy',
@@ -23,7 +37,7 @@ class SplashScreen extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 32),
-            CircularProgressIndicator(color: Colors.white),
+            const CircularProgressIndicator(color: Colors.white),
           ],
         ),
       ),

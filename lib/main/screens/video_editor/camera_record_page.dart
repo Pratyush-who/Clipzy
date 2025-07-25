@@ -1,7 +1,7 @@
 import 'dart:io';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
-import 'package:ffmpeg_kit_flutter_minimal/ffmpeg_kit.dart';
+import 'package:ffmpeg_kit_flutter_new/ffmpeg_kit.dart';
 import 'package:video_player/video_player.dart';
 import 'package:flutter_sound/flutter_sound.dart';
 import 'package:file_picker/file_picker.dart';
