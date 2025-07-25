@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "252607465611",
+    "project_id": "clipzy-54a55",
+    "storage_bucket": "clipzy-54a55.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:252607465611:android:b2fe6db1c2b6f5e446ec8e",
+        "android_client_info": {
+          "package_name": "com.example.clipzy"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC0nUtlI6Mme3IJHJz8kOMIQ1UvGNZoINs"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
