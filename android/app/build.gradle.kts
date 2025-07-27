@@ -32,13 +32,27 @@ android {
         versionCode = flutter.versionCode
         versionName = flutter.versionName
         multiDexEnabled = true 
+        packaging {
+            resources {
+                pickFirsts += listOf(
+                    "lib/**/libc++_shared.so",
+                    "lib/**/libffmpegkit.so"
+                )
+                excludes += "/META-INF/{AL2.0,LGPL2.1}"
+            }
+        }
     }
 
     buildTypes {
+        debug {
+            isMinifyEnabled = false
+            isShrinkResources = false
+        }
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")        
+            signingConfig = signingConfigs.getByName("debug")
+            // Required for FFmpegKit
+            isMinifyEnabled = false
+            isShrinkResources = false  // Must match minifyEnabled
         }
     }
 }
