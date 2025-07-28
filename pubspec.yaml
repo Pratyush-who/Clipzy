@@ -29,6 +29,9 @@ dependencies:
   video_player: ^2.10.0
   path_provider: ^2.1.5
   just_audio: ^0.10.4
+  video_editor: ^3.0.0
+  flutter_ffmpeg_kit_full: ^1.0.1
+  video_thumbnail: ^0.5.6
 
 dev_dependencies:
   flutter_test:
@@ -38,3 +41,6 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+
+  assets:
+    - assets/images/

@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:clipzy/main/auth/auth_wrapper.dart';
 import 'package:clipzy/main/screens/authscreens/login_screen.dart';
 import 'package:flutter/material.dart';
@@ -45,7 +47,7 @@ class AppRoutes {
       case '/video-editor':
         final args = settings.arguments as Map<String, dynamic>?;
         return MaterialPageRoute(
-          builder: (_) => VideoEditorPage(files: args?['files']),
+          builder: (_) => VideoEditorPage(files: args?['files'] as List<File>),
         );
       default:
         return MaterialPageRoute(
