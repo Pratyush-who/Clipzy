@@ -18,6 +18,7 @@ class AppRoutes {
   static const String cameraPermission = '/camera-permission';
   static const String cameraRecord = '/camera-record';
   static const String login = '/login';
+  static const String videoEditor = '/video-editor';
 
   static Route<dynamic>? onGenerateRoute(RouteSettings settings) {
     switch (settings.name) {
@@ -31,6 +32,11 @@ class AppRoutes {
         return MaterialPageRoute(builder: (_) => const AuthScreen());
       case dashboard:
         return MaterialPageRoute(builder: (_) => const DashboardScreen());
+      case videoEditor:
+        final args = settings.arguments as Map<String, dynamic>?;
+        return MaterialPageRoute(
+          builder: (_) => VideoEditorPage(files: args?['files'] as List<File>),
+        );
       case cameraPermission:
         final VoidCallback? onGranted = settings.arguments as VoidCallback?;
         return MaterialPageRoute(
@@ -43,11 +49,6 @@ class AppRoutes {
             cameras: args?['cameras'],
             onDone: args?['onDone'],
           ),
-        );
-      case '/video-editor':
-        final args = settings.arguments as Map<String, dynamic>?;
-        return MaterialPageRoute(
-          builder: (_) => VideoEditorPage(files: args?['files'] as List<File>),
         );
       default:
         return MaterialPageRoute(
