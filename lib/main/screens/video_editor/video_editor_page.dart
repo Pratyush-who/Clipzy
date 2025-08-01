@@ -70,12 +70,13 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
   bool _isTrimming = false;
   int? _activeTrimHandle;
   ScrollController _timelineScrollController = ScrollController();
+  Timer? _playbackTimer;
 
   // Timeline constants
   static const double _trackHeight = 60.0;
   static const double _pixelsPerSecond = 30.0;
   static const double _minClipDurationSeconds = 0.5;
-  static const double _handleWidth = 12.0;
+  static const double _handleWidth = 16.0;
   List<List<Uint8List>> _clipThumbnails = [];
 
   @override
@@ -91,13 +92,15 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
     _playerController?.removeListener(_videoListener);
     _playerController?.dispose();
     _timelineScrollController.dispose();
+    _playbackTimer?.cancel();
     super.dispose();
   }
 
   void _videoListener() {
     if (!mounted ||
         _playerController == null ||
-        !_playerController!.value.isInitialized) return;
+        !_playerController!.value.isInitialized)
+      return;
 
     final controller = _playerController!;
     final position = controller.value.position;
@@ -107,12 +110,20 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
 
       // Check if we've reached the end of the current clip's trim
       if (position >= selectedClip.endTrim) {
-        _playNextClip();
+        // Loop back to start of trimmed section or pause
+        _seekToClipStart();
+        return;
+      }
+
+      // Check if we're before the start of the trim
+      if (position < selectedClip.startTrim) {
+        _seekToClipStart();
         return;
       }
 
       // Update global position
-      double globalPosition = selectedClip.trackPosition +
+      double globalPosition =
+          selectedClip.trackPosition +
           (position - selectedClip.startTrim).inMilliseconds / 1000.0;
 
       if (mounted) {
@@ -124,8 +135,21 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
     }
   }
 
+  void _seekToClipStart() async {
+    if (_selectedClipIndex == null || _selectedClipIndex! >= _clips.length)
+      return;
+
+    final clip = _clips[_selectedClipIndex!];
+    await _playerController?.seekTo(clip.startTrim);
+
+    if (!_isPlaying) {
+      await _playerController?.pause();
+    }
+  }
+
   void _playNextClip() async {
-    if (_selectedClipIndex == null || _selectedClipIndex! >= _clips.length - 1) {
+    if (_selectedClipIndex == null ||
+        _selectedClipIndex! >= _clips.length - 1) {
       setState(() => _isPlaying = false);
       return;
     }
@@ -133,7 +157,11 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
     await _loadClipInPlayer(_selectedClipIndex! + 1, autoPlay: true);
   }
 
-  Future<void> _loadClipInPlayer(int clipIndex, {bool autoPlay = false, Duration? seekTo}) async {
+  Future<void> _loadClipInPlayer(
+    int clipIndex, {
+    bool autoPlay = false,
+    Duration? seekTo,
+  }) async {
     if (clipIndex >= _clips.length || clipIndex < 0) return;
 
     try {
@@ -183,6 +211,15 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
     if (_isPlaying) {
       _playerController!.pause();
     } else {
+      // Make sure we're within the trimmed range before playing
+      if (_selectedClipIndex != null && _selectedClipIndex! < _clips.length) {
+        final clip = _clips[_selectedClipIndex!];
+        final currentPos = _playerController!.value.position;
+
+        if (currentPos < clip.startTrim || currentPos >= clip.endTrim) {
+          _playerController!.seekTo(clip.startTrim);
+        }
+      }
       _playerController!.play();
     }
   }
@@ -190,13 +227,15 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
   void _splitClip() {
     if (_selectedClipIndex == null ||
         _playerController == null ||
-        _selectedClipIndex! >= _clips.length) return;
+        _selectedClipIndex! >= _clips.length)
+      return;
 
     final currentClip = _clips[_selectedClipIndex!];
     final currentPosition = _playerController!.value.position;
 
     if (currentPosition <= currentClip.startTrim ||
-        currentPosition >= currentClip.endTrim) return;
+        currentPosition >= currentClip.endTrim)
+      return;
 
     final firstPartDuration = currentPosition - currentClip.startTrim;
     final secondPartDuration = currentClip.endTrim - currentPosition;
@@ -232,20 +271,28 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
     final clip = _clips[clipIndex];
 
     newStart = Duration(
-      milliseconds: newStart.inMilliseconds.clamp(0, clip.originalDuration.inMilliseconds),
+      milliseconds: newStart.inMilliseconds.clamp(
+        0,
+        clip.originalDuration.inMilliseconds,
+      ),
     );
     newEnd = Duration(
-      milliseconds: newEnd.inMilliseconds.clamp(0, clip.originalDuration.inMilliseconds),
+      milliseconds: newEnd.inMilliseconds.clamp(
+        0,
+        clip.originalDuration.inMilliseconds,
+      ),
     );
 
     if (newStart >= newEnd) return;
-    if ((newEnd - newStart).inMilliseconds < _minClipDurationSeconds * 1000) return;
+    if ((newEnd - newStart).inMilliseconds < _minClipDurationSeconds * 1000)
+      return;
 
     setState(() {
       _clips[clipIndex] = clip.copyWith(startTrim: newStart, endTrim: newEnd);
       _recalculateClipPositions();
     });
 
+    // If this is the currently selected clip, update the player position
     if (_selectedClipIndex == clipIndex && _playerController != null) {
       final currentPos = _playerController!.value.position;
       if (currentPos < newStart || currentPos > newEnd) {
@@ -272,9 +319,12 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
       final clip = _clips[i];
       final clipDuration = clip.trimmedDuration.inMilliseconds / 1000.0;
 
-      if (seconds >= cumulativeTime && seconds < cumulativeTime + clipDuration) {
+      if (seconds >= cumulativeTime &&
+          seconds < cumulativeTime + clipDuration) {
         final offsetInClip = seconds - cumulativeTime;
-        final seekPosition = clip.startTrim + Duration(milliseconds: (offsetInClip * 1000).round());
+        final seekPosition =
+            clip.startTrim +
+            Duration(milliseconds: (offsetInClip * 1000).round());
 
         await _loadClipInPlayer(
           i,
@@ -301,7 +351,8 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
 
     try {
       final directory = await getApplicationDocumentsDirectory();
-      final outputPath = '${directory.path}/edited_video_${DateTime.now().millisecondsSinceEpoch}.mp4';
+      final outputPath =
+          '${directory.path}/edited_video_${DateTime.now().millisecondsSinceEpoch}.mp4';
 
       List<String> inputs = [];
       List<String> filterComplex = [];
@@ -328,10 +379,15 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
         audioConcat += '[a$i]';
       }
 
-      filterComplex.add('${videoConcat}concat=n=${_clips.length}:v=1:a=0[outv]');
-      filterComplex.add('${audioConcat}concat=n=${_clips.length}:v=0:a=1[outa]');
+      filterComplex.add(
+        '${videoConcat}concat=n=${_clips.length}:v=1:a=0[outv]',
+      );
+      filterComplex.add(
+        '${audioConcat}concat=n=${_clips.length}:v=0:a=1[outa]',
+      );
 
-      final command = '${inputs.join(' ')} -filter_complex "${filterComplex.join(';')}" -map "[outv]" -map "[outa]" -c:v libx264 -c:a aac -y "$outputPath"';
+      final command =
+          '${inputs.join(' ')} -filter_complex "${filterComplex.join(';')}" -map "[outv]" -map "[outa]" -c:v libx264 -c:a aac -y "$outputPath"';
 
       final session = await FFmpegKit.execute(command);
       final returnCode = await session.getReturnCode();
@@ -350,7 +406,9 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
 
   void _showSnackBar(String message) {
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
     }
   }
 
@@ -364,7 +422,10 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
   }
 
   double get _timelineWidth {
-    return max(MediaQuery.of(context).size.width, _totalDuration * _pixelsPerSecond * _timelineScale);
+    return max(
+      MediaQuery.of(context).size.width,
+      _totalDuration * _pixelsPerSecond * _timelineScale,
+    );
   }
 
   Future<void> _initializeClips() async {
@@ -383,7 +444,9 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
         if (!await file.exists()) continue;
 
         try {
-          VideoPlayerController? tempController = VideoPlayerController.file(file);
+          VideoPlayerController? tempController = VideoPlayerController.file(
+            file,
+          );
           await tempController.initialize();
           Duration duration = tempController.value.duration;
           await tempController.dispose();
@@ -402,7 +465,10 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
 
           // Generate thumbnails
           final List<Uint8List> clipThumbs = [];
-          final int thumbCount = max(3, (duration.inSeconds / 3).ceil().clamp(3, 8));
+          final int thumbCount = max(
+            3,
+            (duration.inSeconds / 3).ceil().clamp(3, 8),
+          );
 
           for (int t = 0; t < thumbCount; t++) {
             try {
@@ -411,7 +477,9 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
                 imageFormat: ImageFormat.JPEG,
                 maxWidth: 80,
                 quality: 70,
-                timeMs: (duration.inMilliseconds * t / thumbCount).round().clamp(0, duration.inMilliseconds - 1000),
+                timeMs: (duration.inMilliseconds * t / thumbCount)
+                    .round()
+                    .clamp(0, duration.inMilliseconds - 1000),
               );
               if (thumbData != null) {
                 clipThumbs.add(thumbData);
@@ -454,21 +522,15 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
           children: [
             // Header
             _buildHeader(),
-            
+
             // Video Preview
-            Expanded(
-              flex: 3,
-              child: _buildVideoPreview(),
-            ),
-            
+            Expanded(flex: 3, child: _buildVideoPreview()),
+
             // Controls
             _buildControls(),
-            
+
             // Timeline
-            Container(
-              height: 200,
-              child: _buildTimeline(),
-            ),
+            Container(height: 200, child: _buildTimeline()),
           ],
         ),
       ),
@@ -492,14 +554,21 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
           const Spacer(),
           const Text(
             'Edit',
-            style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600),
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 18,
+              fontWeight: FontWeight.w600,
+            ),
           ),
           const Spacer(),
           if (_isExporting)
             const SizedBox(
               width: 20,
               height: 20,
-              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: Colors.white,
+              ),
             )
           else
             IconButton(
@@ -525,7 +594,10 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
           children: [
             const Icon(Icons.video_library, color: Colors.white, size: 64),
             const SizedBox(height: 16),
-            const Text('No video files loaded', style: TextStyle(color: Colors.white, fontSize: 18)),
+            const Text(
+              'No video files loaded',
+              style: TextStyle(color: Colors.white, fontSize: 18),
+            ),
           ],
         ),
       );
@@ -549,43 +621,74 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
             alignment: Alignment.center,
             children: [
               VideoPlayer(_playerController!),
-              
+
               Positioned.fill(
                 child: GestureDetector(
                   onTapDown: (details) {
-                    if (_selectedClipIndex != null) {
+                    if (_selectedClipIndex != null && !_isTrimming) {
                       final clip = _clips[_selectedClipIndex!];
                       final renderBox = context.findRenderObject() as RenderBox;
-                      final localPosition = renderBox.globalToLocal(details.globalPosition);
-                      final progress = localPosition.dx / renderBox.size.width;
-                      final seekPosition = clip.startTrim + Duration(
-                        milliseconds: (progress * clip.trimmedDuration.inMilliseconds).round(),
+                      final localPosition = renderBox.globalToLocal(
+                        details.globalPosition,
                       );
+                      final progress = (localPosition.dx / renderBox.size.width)
+                          .clamp(0.0, 1.0);
+                      final seekPosition =
+                          clip.startTrim +
+                          Duration(
+                            milliseconds:
+                                (progress * clip.trimmedDuration.inMilliseconds)
+                                    .round(),
+                          );
                       final clampedSeekPosition = Duration(
-  milliseconds: seekPosition.inMilliseconds.clamp(
-    clip.startTrim.inMilliseconds,
-    clip.endTrim.inMilliseconds,
-  ),
-);
-_playerController?.seekTo(clampedSeekPosition);
+                        milliseconds: seekPosition.inMilliseconds.clamp(
+                          clip.startTrim.inMilliseconds,
+                          clip.endTrim.inMilliseconds,
+                        ),
+                      );
+                      _playerController?.seekTo(clampedSeekPosition);
                     }
                   },
                 ),
               ),
-              
+
               // Clip indicator
               if (_selectedClipIndex != null)
                 Positioned(
                   top: 16,
                   left: 16,
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
                     decoration: BoxDecoration(
                       color: Colors.black54,
                       borderRadius: BorderRadius.circular(4),
                     ),
                     child: Text(
                       'Clip ${_selectedClipIndex! + 1}/${_clips.length}',
+                      style: const TextStyle(color: Colors.white, fontSize: 12),
+                    ),
+                  ),
+                ),
+
+              // Trim indicator
+              if (_selectedClipIndex != null)
+                Positioned(
+                  top: 16,
+                  right: 16,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.black54,
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(
+                      '${(_clips[_selectedClipIndex!].trimmedDuration.inMilliseconds / 1000).toStringAsFixed(1)}s',
                       style: const TextStyle(color: Colors.white, fontSize: 12),
                     ),
                   ),
@@ -604,8 +707,15 @@ _playerController?.seekTo(clampedSeekPosition);
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
         children: [
-          _buildControlButton(Icons.cut, _selectedClipIndex != null ? _splitClip : null),
-          _buildControlButton(_isPlaying ? Icons.pause : Icons.play_arrow, _playPause, size: 50),
+          _buildControlButton(
+            Icons.content_cut,
+            _selectedClipIndex != null ? _splitClip : null,
+          ),
+          _buildControlButton(
+            _isPlaying ? Icons.pause : Icons.play_arrow,
+            _playPause,
+            size: 50,
+          ),
           _buildControlButton(Icons.zoom_in, () {
             setState(() => _timelineScale = min(_timelineScale * 1.2, 3.0));
           }),
@@ -617,7 +727,11 @@ _playerController?.seekTo(clampedSeekPosition);
     );
   }
 
-  Widget _buildControlButton(IconData icon, VoidCallback? onPressed, {double size = 40}) {
+  Widget _buildControlButton(
+    IconData icon,
+    VoidCallback? onPressed, {
+    double size = 40,
+  }) {
     return Material(
       color: Colors.transparent,
       child: InkWell(
@@ -627,10 +741,14 @@ _playerController?.seekTo(clampedSeekPosition);
           width: size,
           height: size,
           decoration: BoxDecoration(
-            color: onPressed != null ? Colors.white.withOpacity(0.1) : Colors.grey.withOpacity(0.1),
+            color: onPressed != null
+                ? Colors.white.withOpacity(0.1)
+                : Colors.grey.withOpacity(0.1),
             shape: BoxShape.circle,
             border: Border.all(
-              color: onPressed != null ? Colors.white.withOpacity(0.3) : Colors.grey.withOpacity(0.3),
+              color: onPressed != null
+                  ? Colors.white.withOpacity(0.3)
+                  : Colors.grey.withOpacity(0.3),
             ),
           ),
           child: Icon(
@@ -662,6 +780,13 @@ _playerController?.seekTo(clampedSeekPosition);
                   style: const TextStyle(color: Colors.white, fontSize: 12),
                 ),
                 const Spacer(),
+                if (_selectedClipIndex != null) ...[
+                  Text(
+                    'Trim: ${(_clips[_selectedClipIndex!].startTrim.inMilliseconds / 1000).toStringAsFixed(1)}s - ${(_clips[_selectedClipIndex!].endTrim.inMilliseconds / 1000).toStringAsFixed(1)}s',
+                    style: const TextStyle(color: Colors.orange, fontSize: 10),
+                  ),
+                  const SizedBox(width: 16),
+                ],
                 Text(
                   'Scale: ${_timelineScale.toStringAsFixed(1)}x',
                   style: const TextStyle(color: Colors.grey, fontSize: 10),
@@ -669,7 +794,7 @@ _playerController?.seekTo(clampedSeekPosition);
               ],
             ),
           ),
-          
+
           // Timeline tracks
           Expanded(
             child: SingleChildScrollView(
@@ -682,9 +807,12 @@ _playerController?.seekTo(clampedSeekPosition);
                     // Background grid
                     CustomPaint(
                       size: Size(_timelineWidth, 160),
-                      painter: TimelineGridPainter(_timelineScale, _totalDuration),
+                      painter: TimelineGridPainter(
+                        _timelineScale,
+                        _totalDuration,
+                      ),
                     ),
-                    
+
                     // Video track
                     Positioned(
                       top: 40,
@@ -705,10 +833,12 @@ _playerController?.seekTo(clampedSeekPosition);
                         ),
                       ),
                     ),
-                    
+
                     // Playhead
                     Positioned(
-                      left: _currentPosition * _pixelsPerSecond * _timelineScale - 1,
+                      left:
+                          _currentPosition * _pixelsPerSecond * _timelineScale -
+                          1,
                       top: 20,
                       child: Container(
                         width: 2,
@@ -724,18 +854,26 @@ _playerController?.seekTo(clampedSeekPosition);
                         ),
                       ),
                     ),
-                    
+
                     // Scrubber area
                     Positioned(
                       top: 0,
                       child: GestureDetector(
                         onTapDown: (details) {
-                          final seconds = details.localPosition.dx / (_pixelsPerSecond * _timelineScale);
-                          _seekToPosition(seconds);
+                          if (!_isTrimming) {
+                            final seconds =
+                                details.localPosition.dx /
+                                (_pixelsPerSecond * _timelineScale);
+                            _seekToPosition(seconds);
+                          }
                         },
                         onPanUpdate: (details) {
-                          final seconds = details.localPosition.dx / (_pixelsPerSecond * _timelineScale);
-                          _seekToPosition(seconds);
+                          if (!_isTrimming) {
+                            final seconds =
+                                details.localPosition.dx /
+                                (_pixelsPerSecond * _timelineScale);
+                            _seekToPosition(seconds);
+                          }
                         },
                         child: Container(
                           width: _timelineWidth,
@@ -755,10 +893,16 @@ _playerController?.seekTo(clampedSeekPosition);
   }
 
   Widget _buildTimelineClip(VideoClip clip, int index) {
-    final clipWidth = clip.trimmedDuration.inMilliseconds / 1000.0 * _pixelsPerSecond * _timelineScale;
+    final clipWidth =
+        clip.trimmedDuration.inMilliseconds /
+        1000.0 *
+        _pixelsPerSecond *
+        _timelineScale;
     final clipLeft = clip.trackPosition * _pixelsPerSecond * _timelineScale;
     final isSelected = _selectedClipIndex == index;
-    final thumbs = index < _clipThumbnails.length ? _clipThumbnails[index] : <Uint8List>[];
+    final thumbs = index < _clipThumbnails.length
+        ? _clipThumbnails[index]
+        : <Uint8List>[];
 
     return Positioned(
       left: clipLeft,
@@ -778,73 +922,96 @@ _playerController?.seekTo(clampedSeekPosition);
           child: Stack(
             clipBehavior: Clip.hardEdge,
             children: [
-              // Thumbnails
+              // Thumbnails - maintain original frame images
               if (thumbs.isNotEmpty)
                 Positioned.fill(
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(2),
                     child: Row(
-                      children: thumbs.map((thumb) => Expanded(
-                        child: Image.memory(
-                          thumb,
-                          fit: BoxFit.cover,
-                          height: double.infinity,
-                        ),
-                      )).toList(),
+                      children: thumbs
+                          .map(
+                            (thumb) => Expanded(
+                              child: Image.memory(
+                                thumb,
+                                fit: BoxFit.cover,
+                                height: double.infinity,
+                              ),
+                            ),
+                          )
+                          .toList(),
                     ),
                   ),
                 ),
-              
+
               // Clip label
               Positioned(
                 top: 4,
                 left: 4,
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 4,
+                    vertical: 2,
+                  ),
                   decoration: BoxDecoration(
                     color: Colors.black54,
                     borderRadius: BorderRadius.circular(2),
                   ),
                   child: Text(
                     '${index + 1}',
-                    style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                 ),
               ),
-              
-              // Left trim handle
+
+              // Left trim handle - improved dragging
               _buildTrimHandle(
                 isLeft: true,
                 clipIndex: index,
                 onPan: (delta) {
-                  final deltaSeconds = delta / (_pixelsPerSecond * _timelineScale);
-                  final newStart = clip.startTrim + Duration(milliseconds: (deltaSeconds * 1000).round());
-                  final maxStart = clip.endTrim - Duration(milliseconds: (_minClipDurationSeconds * 1000).round());
-                  final clampedStart = Duration(
-                    milliseconds: newStart.inMilliseconds.clamp(0, maxStart.inMilliseconds),
-                  );
-                  if (clampedStart != clip.startTrim) {
-                    _trimClip(index, clampedStart, clip.endTrim);
+                  final deltaSeconds =
+                      delta / (_pixelsPerSecond * _timelineScale);
+                  final newStartMs =
+                      clip.startTrim.inMilliseconds +
+                      (deltaSeconds * 1000).round();
+                  final maxStartMs =
+                      clip.endTrim.inMilliseconds -
+                      (_minClipDurationSeconds * 1000).round();
+
+                  final clampedStartMs = newStartMs.clamp(0, maxStartMs);
+                  final newStart = Duration(milliseconds: clampedStartMs);
+
+                  if (newStart != clip.startTrim) {
+                    _trimClip(index, newStart, clip.endTrim);
                   }
                 },
               ),
-              
-              // Right trim handle
+
+              // Right trim handle - improved dragging
               _buildTrimHandle(
                 isLeft: false,
                 clipIndex: index,
                 onPan: (delta) {
-                  final deltaSeconds = delta / (_pixelsPerSecond * _timelineScale);
-                  final newEnd = clip.endTrim + Duration(milliseconds: (deltaSeconds * 1000).round());
-                  final minEnd = clip.startTrim + Duration(milliseconds: (_minClipDurationSeconds * 1000).round());
-                  final clampedEnd = Duration(
-                    milliseconds: newEnd.inMilliseconds.clamp(
-                      minEnd.inMilliseconds,
-                      clip.originalDuration.inMilliseconds,
-                    ),
+                  final deltaSeconds =
+                      delta / (_pixelsPerSecond * _timelineScale);
+                  final newEndMs =
+                      clip.endTrim.inMilliseconds +
+                      (deltaSeconds * 1000).round();
+                  final minEndMs =
+                      clip.startTrim.inMilliseconds +
+                      (_minClipDurationSeconds * 1000).round();
+
+                  final clampedEndMs = newEndMs.clamp(
+                    minEndMs,
+                    clip.originalDuration.inMilliseconds,
                   );
-                  if (clampedEnd != clip.endTrim) {
-                    _trimClip(index, clip.startTrim, clampedEnd);
+                  final newEnd = Duration(milliseconds: clampedEndMs);
+
+                  if (newEnd != clip.endTrim) {
+                    _trimClip(index, clip.startTrim, newEnd);
                   }
                 },
               ),
@@ -860,21 +1027,28 @@ _playerController?.seekTo(clampedSeekPosition);
     required int clipIndex,
     required Function(double) onPan,
   }) {
+    final isActive =
+        _isTrimming &&
+        _activeTrimHandle == (isLeft ? clipIndex * 2 : clipIndex * 2 + 1);
+
     return Positioned(
       left: isLeft ? -_handleWidth / 2 : null,
       right: isLeft ? null : -_handleWidth / 2,
-      top: 0,
+      top: -4,
       child: GestureDetector(
-        onPanUpdate: (details) => onPan(details.delta.dx),
-        onPanStart: (_) {
+        behavior: HitTestBehavior.translucent,
+        onPanStart: (details) {
           setState(() {
             _isTrimming = true;
-            _activeTrimHandle = isLeft ? 0 : 1;
+            _activeTrimHandle = isLeft ? clipIndex * 2 : clipIndex * 2 + 1;
           });
           HapticFeedback.lightImpact();
           if (_isPlaying) _playerController?.pause();
         },
-        onPanEnd: (_) {
+        onPanUpdate: (details) {
+          onPan(details.delta.dx);
+        },
+        onPanEnd: (details) {
           setState(() {
             _isTrimming = false;
             _activeTrimHandle = null;
@@ -883,33 +1057,36 @@ _playerController?.seekTo(clampedSeekPosition);
         },
         child: Container(
           width: _handleWidth,
-          height: _trackHeight,
-          decoration: BoxDecoration(
-            color: _isTrimming && _activeTrimHandle == (isLeft ? 0 : 1)
-                ? (isLeft ? Colors.green[300] : Colors.red[300])
-                : (isLeft ? Colors.green[600] : Colors.red[600]),
-            borderRadius: BorderRadius.circular(6),
-            border: Border.all(
-              color: Colors.white,
-              width: 2,
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.3),
-                blurRadius: 4,
-                offset: const Offset(0, 2),
+          height: _trackHeight + 8,
+          child: Center(
+            child: Container(
+              width: _handleWidth - 4,
+              height: _trackHeight,
+              decoration: BoxDecoration(
+                color: isActive
+                    ? (isLeft ? Colors.green[400] : Colors.red[400])
+                    : (isLeft ? Colors.green[600] : Colors.red[600]),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.white, width: 2),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.4),
+                    blurRadius: 6,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
               ),
-            ],
-          ),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Container(width: 2, height: 6, color: Colors.white),
-              const SizedBox(height: 2),
-              Container(width: 2, height: 6, color: Colors.white),
-              const SizedBox(height: 2),
-              Container(width: 2, height: 6, color: Colors.white),
-            ],
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Container(width: 3, height: 8, color: Colors.white),
+                  const SizedBox(height: 3),
+                  Container(width: 3, height: 8, color: Colors.white),
+                  const SizedBox(height: 3),
+                  Container(width: 3, height: 8, color: Colors.white),
+                ],
+              ),
+            ),
           ),
         ),
       ),
@@ -930,9 +1107,7 @@ class TimelineGridPainter extends CustomPainter {
       ..color = Colors.grey[600]!
       ..strokeWidth = 0.5;
 
-    final textPaint = TextPainter(
-      textDirection: TextDirection.ltr,
-    );
+    final textPaint = TextPainter(textDirection: TextDirection.ltr);
 
     // Draw vertical grid lines and time markers
     final pixelsPerSecond = 30.0 * scale;
@@ -942,25 +1117,15 @@ class TimelineGridPainter extends CustomPainter {
       final x = i * pixelsPerSecond;
       if (x <= size.width) {
         // Draw grid line
-        canvas.drawLine(
-          Offset(x, 0),
-          Offset(x, size.height),
-          paint,
-        );
+        canvas.drawLine(Offset(x, 0), Offset(x, size.height), paint);
 
         // Draw time label
         textPaint.text = TextSpan(
           text: '${i}s',
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 10,
-          ),
+          style: const TextStyle(color: Colors.white, fontSize: 10),
         );
         textPaint.layout();
-        textPaint.paint(
-          canvas,
-          Offset(x + 2, 2),
-        );
+        textPaint.paint(canvas, Offset(x + 2, 2));
 
         // Draw sub-second markers
         if (scale > 1.0) {
