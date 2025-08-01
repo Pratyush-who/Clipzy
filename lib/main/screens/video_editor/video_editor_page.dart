@@ -73,12 +73,15 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
   ScrollController _bottomToolbarScrollController = ScrollController();
   Timer? _playbackTimer;
   bool _shouldPlayNextClip = false;
+  bool _isDisposed = false;
 
-  // Timeline constants
+  // Timeline constants - Increased handle width for better touch targets
   static const double _trackHeight = 60.0;
   static const double _pixelsPerSecond = 30.0;
   static const double _minClipDurationSeconds = 0.5;
-  static const double _handleWidth = 20.0;
+  static const double _handleWidth = 50.0; // Increased for better visibility
+  static const double _handleTouchArea =
+      80.0; // Larger touch area for easier dragging
   List<List<Uint8List>> _clipThumbnails = [];
 
   @override
@@ -91,6 +94,7 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
 
   @override
   void dispose() {
+    _isDisposed = true;
     _playerController?.removeListener(_videoListener);
     _playerController?.dispose();
     _timelineScrollController.dispose();
@@ -100,7 +104,8 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
   }
 
   void _videoListener() {
-    if (!mounted ||
+    if (_isDisposed ||
+        !mounted ||
         _playerController == null ||
         !_playerController!.value.isInitialized)
       return;
@@ -117,10 +122,12 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
           return;
         } else {
           controller.pause();
-          setState(() {
-            _isPlaying = false;
-            _shouldPlayNextClip = false;
-          });
+          if (mounted) {
+            setState(() {
+              _isPlaying = false;
+              _shouldPlayNextClip = false;
+            });
+          }
           return;
         }
       }
@@ -139,7 +146,34 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
           _currentGlobalPosition = globalPosition.clamp(0.0, _totalDuration);
           _isPlaying = controller.value.isPlaying;
         });
+
+        // Auto-scroll timeline to keep playhead visible for large clips
+        _autoScrollToPlayhead();
       }
+    }
+  }
+
+  void _autoScrollToPlayhead() {
+    if (_isTrimming || !_timelineScrollController.hasClients) return;
+
+    final playheadPosition =
+        _currentGlobalPosition * _pixelsPerSecond * _timelineScale;
+    final screenWidth = MediaQuery.of(context).size.width - 40;
+    final currentScrollOffset = _timelineScrollController.offset;
+
+    // Check if playhead is outside visible area
+    if (playheadPosition < currentScrollOffset ||
+        playheadPosition > currentScrollOffset + screenWidth) {
+      // Calculate target scroll position to center playhead
+      final targetScrollOffset = playheadPosition - (screenWidth / 2);
+      final maxScrollOffset =
+          _timelineScrollController.position.maxScrollExtent;
+
+      _timelineScrollController.animateTo(
+        targetScrollOffset.clamp(0.0, maxScrollOffset),
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeInOut,
+      );
     }
   }
 
@@ -158,10 +192,12 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
   void _playNextClip() async {
     if (_selectedClipIndex == null ||
         _selectedClipIndex! >= _clips.length - 1) {
-      setState(() {
-        _isPlaying = false;
-        _shouldPlayNextClip = false;
-      });
+      if (mounted) {
+        setState(() {
+          _isPlaying = false;
+          _shouldPlayNextClip = false;
+        });
+      }
       return;
     }
 
@@ -176,12 +212,18 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
     if (clipIndex >= _clips.length || clipIndex < 0) return;
 
     try {
-      _playerController?.removeListener(_videoListener);
-      await _playerController?.dispose();
+      // Ensure only one player is active at a time
+      if (_playerController != null) {
+        _playerController!.removeListener(_videoListener);
+        await _playerController!.dispose();
+        _playerController = null;
+      }
 
       final clip = _clips[clipIndex];
       if (!await clip.file.exists()) {
-        setState(() => _selectedClipIndex = clipIndex);
+        if (mounted) {
+          setState(() => _selectedClipIndex = clipIndex);
+        }
         return;
       }
 
@@ -224,9 +266,11 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
 
     if (_isPlaying) {
       _playerController!.pause();
-      setState(() {
-        _shouldPlayNextClip = false;
-      });
+      if (mounted) {
+        setState(() {
+          _shouldPlayNextClip = false;
+        });
+      }
     } else {
       if (_selectedClipIndex != null && _selectedClipIndex! < _clips.length) {
         final clip = _clips[_selectedClipIndex!];
@@ -237,13 +281,15 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
         }
       }
       _playerController!.play();
-      setState(() {
-        _shouldPlayNextClip = true;
-      });
+      if (mounted) {
+        setState(() {
+          _shouldPlayNextClip = true;
+        });
+      }
     }
   }
 
-  void _splitClip() {
+  void _splitClip() async {
     if (_selectedClipIndex == null ||
         _playerController == null ||
         _selectedClipIndex! >= _clips.length)
@@ -266,20 +312,79 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
     }
 
     final firstClip = currentClip.copyWith(
-      id: '${currentClip.id}_part1',
+      id: '${currentClip.id}_part1_${DateTime.now().millisecondsSinceEpoch}',
       endTrim: currentPosition,
     );
 
     final secondClip = currentClip.copyWith(
-      id: '${currentClip.id}_part2',
+      id: '${currentClip.id}_part2_${DateTime.now().millisecondsSinceEpoch}',
       startTrim: currentPosition,
     );
 
-    setState(() {
-      _clips.removeAt(_selectedClipIndex!);
-      _clips.insertAll(_selectedClipIndex!, [firstClip, secondClip]);
-      _recalculateClipPositions();
-    });
+    // Generate thumbnails for the new clips
+    List<Uint8List> firstThumbs = [];
+    List<Uint8List> secondThumbs = [];
+
+    try {
+      // Generate thumbnails for first part
+      final firstThumbCount = max(
+        3,
+        (firstPartDuration.inSeconds / 2).ceil().clamp(3, 8),
+      );
+      for (int t = 0; t < firstThumbCount; t++) {
+        final thumbData = await VideoThumbnail.thumbnailData(
+          video: currentClip.file.path,
+          imageFormat: ImageFormat.JPEG,
+          maxWidth: 80,
+          quality: 70,
+          timeMs:
+              (currentClip.startTrim.inMilliseconds +
+                      (firstPartDuration.inMilliseconds * t / firstThumbCount))
+                  .round(),
+        );
+        if (thumbData != null) {
+          firstThumbs.add(thumbData);
+        }
+      }
+
+      // Generate thumbnails for second part
+      final secondThumbCount = max(
+        3,
+        (secondPartDuration.inSeconds / 2).ceil().clamp(3, 8),
+      );
+      for (int t = 0; t < secondThumbCount; t++) {
+        final thumbData = await VideoThumbnail.thumbnailData(
+          video: currentClip.file.path,
+          imageFormat: ImageFormat.JPEG,
+          maxWidth: 80,
+          quality: 70,
+          timeMs:
+              (currentPosition.inMilliseconds +
+                      (secondPartDuration.inMilliseconds *
+                          t /
+                          secondThumbCount))
+                  .round(),
+        );
+        if (thumbData != null) {
+          secondThumbs.add(thumbData);
+        }
+      }
+    } catch (e) {
+      print('Error generating thumbnails for split: $e');
+    }
+
+    if (mounted) {
+      setState(() {
+        _clips.removeAt(_selectedClipIndex!);
+        _clips.insertAll(_selectedClipIndex!, [firstClip, secondClip]);
+        _clipThumbnails.removeAt(_selectedClipIndex!);
+        _clipThumbnails.insertAll(_selectedClipIndex!, [
+          firstThumbs,
+          secondThumbs,
+        ]);
+        _recalculateClipPositions();
+      });
+    }
 
     _loadClipInPlayer(_selectedClipIndex!);
   }
@@ -306,10 +411,12 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
     if ((newEnd - newStart).inMilliseconds < _minClipDurationSeconds * 1000)
       return;
 
-    setState(() {
-      _clips[clipIndex] = clip.copyWith(startTrim: newStart, endTrim: newEnd);
-      _recalculateClipPositions();
-    });
+    if (mounted) {
+      setState(() {
+        _clips[clipIndex] = clip.copyWith(startTrim: newStart, endTrim: newEnd);
+        _recalculateClipPositions();
+      });
+    }
 
     if (_selectedClipIndex == clipIndex && _playerController != null) {
       final currentPos = _playerController!.value.position;
@@ -355,7 +462,9 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
           ),
         );
 
-        setState(() => _currentGlobalPosition = seconds);
+        if (mounted) {
+          setState(() => _currentGlobalPosition = seconds);
+        }
         return;
       }
       cumulativeTime += clipDuration;
@@ -365,7 +474,9 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
   void _exportVideo() async {
     if (_clips.isEmpty || _isExporting) return;
 
-    setState(() => _isExporting = true);
+    if (mounted) {
+      setState(() => _isExporting = true);
+    }
 
     try {
       final directory = await getApplicationDocumentsDirectory();
@@ -418,12 +529,14 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
     } catch (e) {
       _showSnackBar('Export error: $e');
     } finally {
-      setState(() => _isExporting = false);
+      if (mounted) {
+        setState(() => _isExporting = false);
+      }
     }
   }
 
   void _showSnackBar(String message) {
-    if (mounted) {
+    if (mounted && !_isDisposed) {
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text(message)));
@@ -454,7 +567,9 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
 
   Future<void> _initializeClips() async {
     if (widget.files.isEmpty) {
-      setState(() => _isInitialized = true);
+      if (mounted) {
+        setState(() => _isInitialized = true);
+      }
       return;
     }
 
@@ -539,32 +654,40 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: SafeArea(
-        child: Column(
-          children: [
-            // Header
-            _buildHeader(),
+    return WillPopScope(
+      onWillPop: () async {
+        // Clean up resources before popping
+        _playerController?.pause();
+        _playerController?.removeListener(_videoListener);
+        return true;
+      },
+      child: Scaffold(
+        backgroundColor: Colors.black,
+        body: SafeArea(
+          child: Column(
+            children: [
+              // Header
+              _buildHeader(),
 
-            // Video Preview with Play Button
-            Expanded(child: _buildVideoPreviewWithPlayButton()),
+              // Video Preview with Play Button
+              Expanded(child: _buildVideoPreviewWithPlayButton()),
 
-            // Time Display and Controls
-            _buildTimeDisplaySection(),
+              // Time Display and Controls
+              _buildTimeDisplaySection(),
 
-            // Timeline Scrubber
-            _buildTimelineScrubber(),
+              // Timeline Scrubber
+              _buildTimelineScrubber(),
 
-            // Video Strips
-            _buildVideoStrips(),
+              // Video Strips
+              _buildVideoStrips(),
 
-            // Additional Strips
-            _buildAdditionalStrips(),
+              // Additional Strips
+              _buildAdditionalStrips(),
 
-            // Bottom Toolbar
-            _buildBottomToolbar(),
-          ],
+              // Bottom Toolbar
+              _buildBottomToolbar(),
+            ],
+          ),
         ),
       ),
     );
@@ -582,7 +705,11 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
         children: [
           IconButton(
             icon: const Icon(Icons.close, color: Colors.white, size: 24),
-            onPressed: () => Navigator.of(context).pop(),
+            onPressed: () {
+              _playerController?.pause();
+              _playerController?.removeListener(_videoListener);
+              Navigator.of(context).pop();
+            },
           ),
           const Spacer(),
           const Text(
@@ -655,7 +782,7 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
               child: VideoPlayer(_playerController!),
             ),
           ),
-          
+
           // Play button on the left side
           Positioned(
             left: 20,
@@ -694,9 +821,9 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
             icon: const Icon(Icons.undo, color: Colors.grey, size: 20),
             onPressed: null, // TODO: Implement undo
           ),
-          
+
           const SizedBox(width: 20),
-          
+
           // Time display
           Text(
             '${_formatDuration(_currentGlobalPosition)}/${_formatDuration(_totalDuration)}',
@@ -706,9 +833,9 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
               fontWeight: FontWeight.w500,
             ),
           ),
-          
+
           const SizedBox(width: 20),
-          
+
           // Redo button
           IconButton(
             icon: const Icon(Icons.redo, color: Colors.grey, size: 20),
@@ -735,7 +862,9 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
             Positioned.fill(
               child: FractionallySizedBox(
                 alignment: Alignment.centerLeft,
-                widthFactor: _totalDuration > 0 ? _currentGlobalPosition / _totalDuration : 0,
+                widthFactor: _totalDuration > 0
+                    ? _currentGlobalPosition / _totalDuration
+                    : 0,
                 child: Container(
                   decoration: BoxDecoration(
                     color: Colors.white,
@@ -744,11 +873,13 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
                 ),
               ),
             ),
-            
+
             // Scrubber handle
             Positioned(
-              left: _totalDuration > 0 
-                  ? (MediaQuery.of(context).size.width - 40) * (_currentGlobalPosition / _totalDuration) - 6
+              left: _totalDuration > 0
+                  ? (MediaQuery.of(context).size.width - 40) *
+                            (_currentGlobalPosition / _totalDuration) -
+                        6
                   : 0,
               top: -4,
               child: Container(
@@ -761,13 +892,15 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
                 ),
               ),
             ),
-            
+
             // Tap area
             Positioned.fill(
               child: GestureDetector(
                 onTapDown: (details) {
                   if (!_isTrimming) {
-                    final progress = details.localPosition.dx / (MediaQuery.of(context).size.width - 40);
+                    final progress =
+                        details.localPosition.dx /
+                        (MediaQuery.of(context).size.width - 40);
                     final seconds = progress * _totalDuration;
                     _seekToGlobalPosition(seconds);
                   }
@@ -814,13 +947,11 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
 
               // Playhead for strips
               Positioned(
-                left: _currentGlobalPosition * _pixelsPerSecond * _timelineScale - 1,
+                left:
+                    _currentGlobalPosition * _pixelsPerSecond * _timelineScale -
+                    1,
                 top: 5,
-                child: Container(
-                  width: 2,
-                  height: 70,
-                  color: Colors.white,
-                ),
+                child: Container(width: 2, height: 70, color: Colors.white),
               ),
             ],
           ),
@@ -830,19 +961,27 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
   }
 
   Widget _buildVideoClip(VideoClip clip, int index) {
-    final clipWidth = clip.trimmedDuration.inMilliseconds / 1000.0 * _pixelsPerSecond * _timelineScale;
+    final clipWidth =
+        clip.trimmedDuration.inMilliseconds /
+        1000.0 *
+        _pixelsPerSecond *
+        _timelineScale;
     final clipLeft = clip.trackPosition * _pixelsPerSecond * _timelineScale;
     final isSelected = _selectedClipIndex == index;
-    final thumbs = index < _clipThumbnails.length ? _clipThumbnails[index] : <Uint8List>[];
+    final thumbs = index < _clipThumbnails.length
+        ? _clipThumbnails[index]
+        : <Uint8List>[];
 
     return Positioned(
       left: clipLeft,
       top: 10,
       child: GestureDetector(
         onTap: () {
-          setState(() {
-            _selectedClipIndex = index;
-          });
+          if (mounted) {
+            setState(() {
+              _selectedClipIndex = index;
+            });
+          }
           _loadClipInPlayer(index);
           final tapPosition = clip.trackPosition;
           _seekToGlobalPosition(tapPosition);
@@ -866,13 +1005,17 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(6),
                     child: Row(
-                      children: thumbs.map((thumb) => Expanded(
-                        child: Image.memory(
-                          thumb,
-                          fit: BoxFit.cover,
-                          height: double.infinity,
-                        ),
-                      )).toList(),
+                      children: thumbs
+                          .map(
+                            (thumb) => Expanded(
+                              child: Image.memory(
+                                thumb,
+                                fit: BoxFit.cover,
+                                height: double.infinity,
+                              ),
+                            ),
+                          )
+                          .toList(),
                     ),
                   ),
                 ),
@@ -883,13 +1026,18 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
                   isLeft: true,
                   clipIndex: index,
                   onPan: (delta) {
-                    final deltaSeconds = delta / (_pixelsPerSecond * _timelineScale);
-                    final newStartMs = clip.startTrim.inMilliseconds + (deltaSeconds * 1000).round();
-                    final maxStartMs = clip.endTrim.inMilliseconds - (_minClipDurationSeconds * 1000).round();
-                    
+                    final deltaSeconds =
+                        delta / (_pixelsPerSecond * _timelineScale);
+                    final newStartMs =
+                        clip.startTrim.inMilliseconds +
+                        (deltaSeconds * 1000).round();
+                    final maxStartMs =
+                        clip.endTrim.inMilliseconds -
+                        (_minClipDurationSeconds * 1000).round();
+
                     final clampedStartMs = newStartMs.clamp(0, maxStartMs);
                     final newStart = Duration(milliseconds: clampedStartMs);
-                    
+
                     if (newStart != clip.startTrim) {
                       _trimClip(index, newStart, clip.endTrim);
                     }
@@ -900,13 +1048,21 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
                   isLeft: false,
                   clipIndex: index,
                   onPan: (delta) {
-                    final deltaSeconds = delta / (_pixelsPerSecond * _timelineScale);
-                    final newEndMs = clip.endTrim.inMilliseconds + (deltaSeconds * 1000).round();
-                    final minEndMs = clip.startTrim.inMilliseconds + (_minClipDurationSeconds * 1000).round();
-                    
-                    final clampedEndMs = newEndMs.clamp(minEndMs, clip.originalDuration.inMilliseconds);
+                    final deltaSeconds =
+                        delta / (_pixelsPerSecond * _timelineScale);
+                    final newEndMs =
+                        clip.endTrim.inMilliseconds +
+                        (deltaSeconds * 1000).round();
+                    final minEndMs =
+                        clip.startTrim.inMilliseconds +
+                        (_minClipDurationSeconds * 1000).round();
+
+                    final clampedEndMs = newEndMs.clamp(
+                      minEndMs,
+                      clip.originalDuration.inMilliseconds,
+                    );
                     final newEnd = Duration(milliseconds: clampedEndMs);
-                    
+
                     if (newEnd != clip.endTrim) {
                       _trimClip(index, clip.startTrim, newEnd);
                     }
@@ -965,9 +1121,7 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
                   child: Stack(
                     children: [
                       Positioned.fill(
-                        child: CustomPaint(
-                          painter: AudioWaveformPainter(),
-                        ),
+                        child: CustomPaint(painter: AudioWaveformPainter()),
                       ),
                       const Center(
                         child: Text(
@@ -1011,16 +1165,12 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
           children: toolbarItems.asMap().entries.map((entry) {
             final index = entry.key;
             final icon = entry.value;
-            
+
             return Container(
               width: 60,
               height: 60,
               child: IconButton(
-                icon: Icon(
-                  icon,
-                  color: Colors.white,
-                  size: 24,
-                ),
+                icon: Icon(icon, color: Colors.white, size: 24),
                 onPressed: () {
                   if (icon == Icons.content_cut) {
                     _splitClip();
@@ -1040,66 +1190,98 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
     required int clipIndex,
     required Function(double) onPan,
   }) {
-    final isActive = _isTrimming && _activeTrimHandle == (isLeft ? clipIndex * 2 : clipIndex * 2 + 1);
+    final isActive =
+        _isTrimming &&
+        _activeTrimHandle == (isLeft ? clipIndex * 2 : clipIndex * 2 + 1);
 
     return Positioned(
-      left: isLeft ? -_handleWidth / 2 : null,
-      right: isLeft ? null : -_handleWidth / 2,
-      top: -8,
+      left: isLeft ? -_handleTouchArea / 2 : null,
+      right: isLeft ? null : -_handleTouchArea / 2,
+      top: -10,
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onPanStart: (details) {
-          setState(() {
-            _isTrimming = true;
-            _activeTrimHandle = isLeft ? clipIndex * 2 : clipIndex * 2 + 1;
-          });
+          if (mounted) {
+            setState(() {
+              _isTrimming = true;
+              _activeTrimHandle = isLeft ? clipIndex * 2 : clipIndex * 2 + 1;
+            });
+          }
           HapticFeedback.lightImpact();
           if (_isPlaying) {
             _playerController?.pause();
-            setState(() {
-              _shouldPlayNextClip = false;
-            });
+            if (mounted) {
+              setState(() {
+                _shouldPlayNextClip = false;
+              });
+            }
           }
         },
         onPanUpdate: (details) {
           onPan(details.delta.dx);
         },
         onPanEnd: (details) {
-          setState(() {
-            _isTrimming = false;
-            _activeTrimHandle = null;
-          });
+          if (mounted) {
+            setState(() {
+              _isTrimming = false;
+              _activeTrimHandle = null;
+            });
+          }
           HapticFeedback.mediumImpact();
         },
+        onTapDown: (details) {
+          // Provide immediate feedback when touching the handle
+          HapticFeedback.selectionClick();
+        },
         child: Container(
-          width: _handleWidth,
-          height: _trackHeight + 16,
+          width: _handleTouchArea,
+          height: _trackHeight + 20,
           child: Center(
             child: Container(
-              width: 8,
-              height: _trackHeight + 8,
+              width: _handleWidth,
+              height: _trackHeight + 16,
               decoration: BoxDecoration(
-                color: isActive ? Colors.yellow : (isLeft ? Colors.green : Colors.red),
-                borderRadius: BorderRadius.circular(4),
-                border: Border.all(color: Colors.white, width: 2),
+                color: isActive
+                    ? Colors.yellow
+                    : (isLeft ? Colors.green : Colors.red),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.white, width: 4),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.6),
-                    blurRadius: 6,
-                    offset: const Offset(0, 2),
+                    color: Colors.black.withOpacity(0.9),
+                    blurRadius: 12,
+                    offset: const Offset(0, 4),
                   ),
                 ],
               ),
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: List.generate(5, (index) => Container(
-                  width: 3,
-                  height: 3,
-                  decoration: BoxDecoration(
+                children: [
+                  // Top arrow indicator
+                  Icon(
+                    isLeft ? Icons.arrow_back_ios : Icons.arrow_forward_ios,
                     color: Colors.white,
-                    borderRadius: BorderRadius.circular(1.5),
+                    size: 16,
                   ),
-                )),
+                  // Dots
+                  ...List.generate(
+                    4,
+                    (index) => Container(
+                      width: 6,
+                      height: 6,
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(3),
+                      ),
+                    ),
+                  ),
+                  // Bottom arrow indicator
+                  Icon(
+                    isLeft ? Icons.arrow_back_ios : Icons.arrow_forward_ios,
+                    color: Colors.white,
+                    size: 16,
+                  ),
+                ],
               ),
             ),
           ),
@@ -1125,12 +1307,8 @@ class AudioWaveformPainter extends CustomPainter {
       final x = i * spacing;
       final height = random.nextDouble() * size.height * 0.8;
       final y = (size.height - height) / 2;
-      
-      canvas.drawLine(
-        Offset(x, y),
-        Offset(x, y + height),
-        paint,
-      );
+
+      canvas.drawLine(Offset(x, y), Offset(x, y + height), paint);
     }
   }
 
