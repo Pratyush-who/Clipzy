@@ -7,6 +7,8 @@ class VideoClip {
   final Duration endTrim;
   final Duration originalDuration;
   final double trackPosition;
+  final int width;
+  final int height;
 
   VideoClip({
     required this.id,
@@ -15,6 +17,8 @@ class VideoClip {
     required this.endTrim,
     required this.originalDuration,
     this.trackPosition = 0.0,
+    this.width = 1920,
+    this.height = 1080,
   });
 
   Duration get trimmedDuration => endTrim - startTrim;
@@ -26,6 +30,8 @@ class VideoClip {
     Duration? endTrim,
     Duration? originalDuration,
     double? trackPosition,
+    int? width,
+    int? height,
   }) {
     return VideoClip(
       id: id ?? this.id,
@@ -34,6 +40,8 @@ class VideoClip {
       endTrim: endTrim ?? this.endTrim,
       originalDuration: originalDuration ?? this.originalDuration,
       trackPosition: trackPosition ?? this.trackPosition,
+      width: width ?? this.width,
+      height: height ?? this.height,
     );
   }
 }

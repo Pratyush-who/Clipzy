@@ -2,7 +2,6 @@ import 'dart:io';
 import 'dart:async';
 import 'dart:ui';
 import 'dart:typed_data';
-import 'package:clipzy/routes.dart';
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:path_provider/path_provider.dart';
@@ -12,13 +11,8 @@ import 'package:video_thumbnail/video_thumbnail.dart' as video_thumbnail;
 
 class CameraRecordPage extends StatefulWidget {
   final List<CameraDescription> cameras;
-  final Function(List<File>) onDone;
 
-  const CameraRecordPage({
-    super.key,
-    required this.cameras,
-    required this.onDone,
-  });
+  const CameraRecordPage({super.key, required this.cameras});
 
   @override
   State<CameraRecordPage> createState() => _CameraRecordPageState();
@@ -142,28 +136,28 @@ class _CameraRecordPageState extends State<CameraRecordPage>
   }
 
   Future<void> _startCountdown() async {
-  setState(() {
-    _isCountingDown = true;
-    _countdownSeconds = _timerOptions[_selectedTimer];
-  });
+    setState(() {
+      _isCountingDown = true;
+      _countdownSeconds = _timerOptions[_selectedTimer];
+    });
 
-  _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) async {
-    if (!mounted) {
-      timer.cancel();
-      return;
-    }
-
-    setState(() => _countdownSeconds--);
-
-    if (_countdownSeconds <= 0) {
-      timer.cancel();
-      await _startRecording();
-      if (mounted) {
-        setState(() => _isCountingDown = false);
+    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) async {
+      if (!mounted) {
+        timer.cancel();
+        return;
       }
-    }
-  });
-}
+
+      setState(() => _countdownSeconds--);
+
+      if (_countdownSeconds <= 0) {
+        timer.cancel();
+        await _startRecording();
+        if (mounted) {
+          setState(() => _isCountingDown = false);
+        }
+      }
+    });
+  }
 
   Future<void> _startRecording() async {
     try {
@@ -342,22 +336,21 @@ class _CameraRecordPageState extends State<CameraRecordPage>
   }
 
   Future<void> _switchCamera() async {
-  if (widget.cameras.length > 1 && !_isRecording && !_isCountingDown) {
-    setState(() => _isInitialized = false);
-    await _controller?.dispose();
-    
-    _currentCameraIndex = (_currentCameraIndex + 1) % widget.cameras.length;
-    await _initializeCamera();
-    
-    // Reapply current settings
-    if (_isInitialized && mounted) {
-      await _controller!.setFlashMode(
-        _isFlashOn ? FlashMode.torch : FlashMode.off,
-      );
+    if (widget.cameras.length > 1 && !_isRecording && !_isCountingDown) {
+      setState(() => _isInitialized = false);
+      await _controller?.dispose();
+
+      _currentCameraIndex = (_currentCameraIndex + 1) % widget.cameras.length;
+      await _initializeCamera();
+
+      // Reapply current settings
+      if (_isInitialized && mounted) {
+        await _controller!.setFlashMode(
+          _isFlashOn ? FlashMode.torch : FlashMode.off,
+        );
+      }
     }
   }
-}
-
 
   Future<void> _toggleFlash() async {
     if (_controller != null && _isInitialized) {
@@ -374,23 +367,23 @@ class _CameraRecordPageState extends State<CameraRecordPage>
   }
 
   Future<void> _toggleMute() async {
-  if (!_isRecording && !_isCountingDown && _controller != null) {
-    try {
-      setState(() => _isMuted = !_isMuted);
-      await _controller!.setDescription(
-        CameraDescription(
-          name: _controller!.description.name,
-          lensDirection: _controller!.description.lensDirection,
-          sensorOrientation: _controller!.description.sensorOrientation,
-        ),
-        // enableAudio: !_isMuted,
-      );
-    } catch (e) {
-      print('Mute toggle error: $e');
-      setState(() => _isMuted = !_isMuted); // Revert on error
+    if (!_isRecording && !_isCountingDown && _controller != null) {
+      try {
+        setState(() => _isMuted = !_isMuted);
+        await _controller!.setDescription(
+          CameraDescription(
+            name: _controller!.description.name,
+            lensDirection: _controller!.description.lensDirection,
+            sensorOrientation: _controller!.description.sensorOrientation,
+          ),
+          // enableAudio: !_isMuted,
+        );
+      } catch (e) {
+        print('Mute toggle error: $e');
+        setState(() => _isMuted = !_isMuted); // Revert on error
+      }
     }
   }
-}
 
   void _toggleBeauty() {
     setState(() => _isBeautyOn = !_isBeautyOn);
@@ -445,14 +438,15 @@ class _CameraRecordPageState extends State<CameraRecordPage>
   }
 
   void _finishRecording() {
-  if (_recordedClips.isNotEmpty) {
-    Navigator.pushNamed(
-      context,
-      AppRoutes.videoEditor,  // Use the named constant
-      arguments: {'files': _recordedClips},
-    );
+    if (_recordedClips.isNotEmpty) {
+      print('=== Camera Record: Sending files ===');
+      print('Number of clips: ${_recordedClips.length}');
+      print('Clip paths: ${_recordedClips.map((f) => f.path).toList()}');
+      Navigator.pop(context, _recordedClips);
+    } else {
+      print('=== Camera Record: No clips to send ===');
+    }
   }
-}
 
   String _formatTime(int seconds) {
     int minutes = seconds ~/ 60;

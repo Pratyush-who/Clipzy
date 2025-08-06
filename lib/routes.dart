@@ -34,9 +34,14 @@ class AppRoutes {
         return MaterialPageRoute(builder: (_) => const DashboardScreen());
       case videoEditor:
         final args = settings.arguments as Map<String, dynamic>?;
-        return MaterialPageRoute(
-          builder: (_) => VideoEditorPage(files: args?['files'] as List<File>),
-        );
+        final files = args?['files'] as List<File>? ?? [];
+        print('=== Route: Video Editor ===');
+        print('Args: $args');
+        print('Files from args: ${args?['files']}');
+        print('Files type: ${args?['files']?.runtimeType}');
+        print('Casted files: $files');
+        print('Files length: ${files.length}');
+        return MaterialPageRoute(builder: (_) => VideoEditorPage(files: files));
       case cameraPermission:
         final VoidCallback? onGranted = settings.arguments as VoidCallback?;
         return MaterialPageRoute(
@@ -45,10 +50,7 @@ class AppRoutes {
       case cameraRecord:
         final args = settings.arguments as Map<String, dynamic>?;
         return MaterialPageRoute(
-          builder: (_) => CameraRecordPage(
-            cameras: args?['cameras'],
-            onDone: args?['onDone'],
-          ),
+          builder: (_) => CameraRecordPage(cameras: args?['cameras']),
         );
       default:
         return MaterialPageRoute(

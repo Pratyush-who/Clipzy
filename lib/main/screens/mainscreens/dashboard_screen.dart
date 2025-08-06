@@ -78,11 +78,27 @@ class DashboardScreen extends StatelessWidget {
     if (cameraStatus.isGranted && micStatus.isGranted) {
       final cameras = await availableCameras();
       Navigator.pop(context);
-      Navigator.pushNamed(
+      final result = await Navigator.pushNamed(
         context,
         AppRoutes.cameraRecord,
-        arguments: {'cameras': cameras, 'onDone': (List<File> clips) {}},
+        arguments: {'cameras': cameras},
       );
+
+      if (result != null && result is List<File> && result.isNotEmpty) {
+        print('=== Dashboard received files ===');
+        print('Number of files: ${result.length}');
+        print('File paths: ${result.map((f) => f.path).toList()}');
+
+        Navigator.pushNamed(
+          context,
+          AppRoutes.videoEditor,
+          arguments: {'files': result},
+        );
+      } else {
+        print('=== Dashboard: No files received ===');
+        print('Result type: ${result.runtimeType}');
+        print('Result: $result');
+      }
     } else {
       Navigator.pop(context);
       Navigator.pushNamed(context, AppRoutes.cameraPermission);
